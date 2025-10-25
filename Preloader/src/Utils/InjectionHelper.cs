@@ -1,38 +1,57 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
-using HarmonyLib;
 using InjectionLibrary.Attributes;
 using InjectionLibrary.Exceptions;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Collections.Generic;
 using MonoMod.Utils;
-using CustomAttributeNamedArgument = Mono.Cecil.CustomAttributeNamedArgument;
-using EventAttributes = Mono.Cecil.EventAttributes;
-using FieldAttributes = Mono.Cecil.FieldAttributes;
-using ICustomAttributeProvider = Mono.Cecil.ICustomAttributeProvider;
-using MethodAttributes = Mono.Cecil.MethodAttributes;
-using ParameterAttributes = Mono.Cecil.ParameterAttributes;
-using PropertyAttributes = Mono.Cecil.PropertyAttributes;
 
 namespace InjectionLibrary.Utils;
 
+/// <summary>
+/// Helper class for dynamically injecting interface implementations into types at runtime using Mono.Cecil.
+/// Provides methods to implement properties, events, and methods from interfaces into existing types.
+/// </summary>
 internal static class InjectionHelper
 {
+    /// <summary>
+    /// Full name of the HandleErrorsAttribute type used for custom error handling strategies.
+    /// </summary>
     private static readonly string ErrorStrategyAttributeName = typeof(HandleErrorsAttribute).FullName;
-    
-    private const MethodAttributes InterfaceMethodAttributes = 
+
+    /// <summary>
+    /// Method attributes for standard interface methods (public, virtual, new slot).
+    /// </summary>
+    private const MethodAttributes InterfaceMethodAttributes =
         MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.NewSlot;
-    private const MethodAttributes InterfaceSpecialMethodAttributes = 
+
+    /// <summary>
+    /// Method attributes for special interface methods like property getters/setters and event add/remove.
+    /// </summary>
+    private const MethodAttributes InterfaceSpecialMethodAttributes =
         MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.NewSlot |
         MethodAttributes.SpecialName | MethodAttributes.HideBySig;
-    private const PropertyAttributes InterfacePropertyAttributes = 
+
+    /// <summary>
+    /// Default property attributes for interface properties.
+    /// </summary>
+    private const PropertyAttributes InterfacePropertyAttributes =
         PropertyAttributes.None;
-    private const EventAttributes InterfaceEventAttributes = 
+
+    /// <summary>
+    /// Default event attributes for interface events.
+    /// </summary>
+    private const EventAttributes InterfaceEventAttributes =
         EventAttributes.None;
 
+    /// <summary>
+    /// Creates an instance of an attribute from a Mono.Cecil CustomAttribute.
+    /// </summary>
+    /// <typeparam name="T">The attribute type to create.</typeparam>
+    /// <param name="attribute">The Mono.Cecil custom attribute.</param>
+    /// <returns>An instance of the attribute with constructor arguments applied.</returns>
     public static T GetAttributeInstance<T>(this CustomAttribute attribute) where T : Attribute
     {
         var attrType = typeof(T);
@@ -40,6 +59,11 @@ internal static class InjectionHelper
         return (T)Activator.CreateInstance(attrType, constructorArgs);
     }
 
+    /// <summary>
+    /// Handles errors based on the specified error handling strategy.
+    /// </summary>
+    /// <param name="message">The error message to log.</param>
+    /// <param name="strategy">The error handling strategy to use.</param>
     private static void HandleError(string message, ErrorHandlingStrategy strategy)
     {
         switch (strategy)
@@ -59,40 +83,60 @@ internal static class InjectionHelper
         }
     }
 
+    /// <summary>
+    /// Implements an interface on a target type by injecting all necessary properties, events, and methods.
+    /// </summary>
+    /// <param name="self">The type to inject the interface into.</param>
+    /// <param name="interface">The interface type to implement.</param>
+    /// <param name="errorHandlingStrategy">The strategy for handling errors during implementation.</param>
     internal static void ImplementInterface(this TypeDefinition self, TypeReference @interface, ErrorHandlingStrategy errorHandlingStrategy)
     {
         var definition = @interface.Resolve();
-        
+
+        // Check if the interface has a custom error handling strategy
         var attribute = definition.CustomAttributes.FirstOrDefault(a => a.AttributeType.FullName == ErrorStrategyAttributeName);
         if (attribute != null)
         {
             errorHandlingStrategy = attribute.GetAttributeInstance<HandleErrorsAttribute>().Strategy;
         }
 
+        // Validate that the type is an interface
         if (!definition.IsInterface)
             HandleError($"Type '{@interface.FullName}' is not an interface!", errorHandlingStrategy);
-        
+
+        // Validate that the interface is not generic
         if (definition.HasGenericParameters)
             HandleError($"Type '{@interface.FullName}' is a Generic type!", errorHandlingStrategy);
 
         Preloader.Log.LogDebug($"Injecting '{@interface.FullName}' into {self.FullName}'");
 
-        //import it in the target assembly
+        // Import the interface reference into the target assembly
         var newRef = self.Module.ImportReference(@interface);
 
+        // Track members that have already been implemented to avoid duplicates
         var blacklist = new HashSet<IMemberDefinition>();
 
+        // Implement all interface members
         Interfaces.ImplementProperties(self, definition, blacklist, errorHandlingStrategy);
-
         Interfaces.ImplementEvents(self, definition, blacklist, errorHandlingStrategy);
-
         Interfaces.ImplementMethods(self, definition, blacklist, errorHandlingStrategy);
 
+        // Add the interface to the type's interface list
         self.Interfaces.Add(new InterfaceImplementation(newRef));
     }
 
+    /// <summary>
+    /// Contains methods for implementing interface members (properties, events, methods) into types.
+    /// </summary>
     private static class Interfaces
     {
+        /// <summary>
+        /// Implements all properties from an interface into the target type.
+        /// </summary>
+        /// <param name="type">The target type to implement properties into.</param>
+        /// <param name="interface">The interface containing the properties to implement.</param>
+        /// <param name="blacklist">Set of members already implemented to avoid duplicates.</param>
+        /// <param name="errorHandlingStrategy">The strategy for handling errors during implementation.</param>
         internal static void ImplementProperties(in TypeDefinition type, TypeDefinition @interface,
             in HashSet<IMemberDefinition> blacklist,
             ErrorHandlingStrategy errorHandlingStrategy)
@@ -103,6 +147,13 @@ internal static class InjectionHelper
             }
         }
 
+        /// <summary>
+        /// Implements all events from an interface into the target type.
+        /// </summary>
+        /// <param name="type">The target type to implement events into.</param>
+        /// <param name="interface">The interface containing the events to implement.</param>
+        /// <param name="blacklist">Set of members already implemented to avoid duplicates.</param>
+        /// <param name="errorHandlingStrategy">The strategy for handling errors during implementation.</param>
         internal static void ImplementEvents(in TypeDefinition type, TypeDefinition @interface,
             in HashSet<IMemberDefinition> blacklist,
             ErrorHandlingStrategy errorHandlingStrategy)
@@ -113,6 +164,13 @@ internal static class InjectionHelper
             }
         }
 
+        /// <summary>
+        /// Implements all methods from an interface into the target type.
+        /// </summary>
+        /// <param name="type">The target type to implement methods into.</param>
+        /// <param name="interface">The interface containing the methods to implement.</param>
+        /// <param name="blacklist">Set of members already implemented to avoid duplicates.</param>
+        /// <param name="errorHandlingStrategy">The strategy for handling errors during implementation.</param>
         internal static void ImplementMethods(in TypeDefinition type, TypeDefinition @interface,
             in HashSet<IMemberDefinition> blacklist,
             ErrorHandlingStrategy errorHandlingStrategy)
@@ -123,6 +181,14 @@ internal static class InjectionHelper
             }
         }
 
+        /// <summary>
+        /// Implements a single property from an interface into the target type.
+        /// Creates backing fields and getter/setter methods as needed.
+        /// </summary>
+        /// <param name="type">The target type to implement the property into.</param>
+        /// <param name="property">The property definition from the interface.</param>
+        /// <param name="blacklist">Set of members already implemented to avoid duplicates.</param>
+        /// <param name="errorHandlingStrategy">The strategy for handling errors during implementation.</param>
         private static void ImplementProperty(in TypeDefinition type, PropertyDefinition property,
             in HashSet<IMemberDefinition> blacklist,
             ErrorHandlingStrategy errorHandlingStrategy)
@@ -132,19 +198,23 @@ internal static class InjectionHelper
 
             var hasImplementation = false;
 
+            // Skip if already implemented
             if (!blacklist.Add(property))
                 return;
 
             Preloader.Log.LogDebug($"Adding Property  '{property.Name}' to {type.FullName}'");
-            
+
+            // Check for property-specific error handling strategy
             var attribute = property.CustomAttributes.FirstOrDefault(a => a.AttributeType.FullName == ErrorStrategyAttributeName);
             if (attribute != null)
             {
                 errorHandlingStrategy = attribute.GetAttributeInstance<HandleErrorsAttribute>().Strategy;
             }
-                
+
+            // Import the property type into the target module
             var typeRef = type.Module.ImportReference(property.PropertyType);
 
+            // Implement the getter method if it's abstract
             if (property.GetMethod is { IsAbstract: true } && blacklist.Add(property.GetMethod))
             {
                 Preloader.Log.LogDebug($"Adding getter of '{property.Name}' to {type.FullName}'");
@@ -152,21 +222,25 @@ internal static class InjectionHelper
                 var getMethod = type.FindMethod($"get_{property.Name}");
                 if ( getMethod != null)
                 {
+                    // Method already exists, update its attributes
                     HandleError($"Method 'get_{property.Name}' is already defined in '{type.FullName}'", errorHandlingStrategy);
                     getMethod.Attributes = InterfaceSpecialMethodAttributes;
                 }
                 else
                 {
+                    // Initialize backing field and property definition
                     Init(type, out implementation);
 
+                    // Create getter method that returns the backing field
                     getMethod = new MethodDefinition(
                         $"get_{property.Name}",
                         InterfaceSpecialMethodAttributes,
                         typeRef
                     );
-                    
+
                     getMethod.MarkAsInjected(type.Module);
 
+                    // Generate IL: load 'this', load backing field, return
                     var ilProcessor = getMethod.Body.GetILProcessor();
                     ilProcessor.Emit(OpCodes.Ldarg_0);
                     ilProcessor.Emit(OpCodes.Ldfld, backingField);
@@ -178,30 +252,37 @@ internal static class InjectionHelper
                 getMethod.CopyCustomAttributes(property.GetMethod);
             }
 
+            // Implement the setter method if it's abstract
             if (property.SetMethod is { IsAbstract: true } && blacklist.Add(property.SetMethod))
             {
                 Preloader.Log.LogDebug($"Adding setter of '{property.Name}' to {type.FullName}'");
-                
+
                 var setMethod = type.FindMethod($"set_{property.Name}");
                 if (setMethod != null)
                 {
+                    // Method already exists, update its attributes
                     HandleError($"Method 'set_{property.Name}' is already defined in '{type.FullName}'", errorHandlingStrategy);
                     setMethod.Attributes = InterfaceSpecialMethodAttributes;
                 }
                 else
                 {
+                    // Initialize backing field and property definition if not already done
                     if (!hasImplementation)
                         Init(type, out implementation);
 
+                    // Create setter method that assigns to the backing field
                     setMethod = new MethodDefinition(
                         $"set_{property.Name}",
                         InterfaceSpecialMethodAttributes,
                         type.Module.TypeSystem.Void
                     );
-                    
+
                     setMethod.MarkAsInjected(type.Module);
 
+                    // Add 'value' parameter
                     setMethod.Parameters.Add(new ParameterDefinition("value", ParameterAttributes.None, typeRef));
+
+                    // Generate IL: load 'this', load argument, store to field, return
                     var ilProcessor = setMethod.Body.GetILProcessor();
                     ilProcessor.Emit(OpCodes.Ldarg_0);
                     ilProcessor.Emit(OpCodes.Ldarg_1);
@@ -214,23 +295,25 @@ internal static class InjectionHelper
                 setMethod.CopyCustomAttributes(property.SetMethod);
             }
 
+            // If no implementation was needed (property has default implementation), exit early
             if (!hasImplementation)
             {
                 Preloader.Log.LogDebug($"Default Property '{property.Name}' to {type.FullName}'");
                 return;
             }
 
-            // add backing field and implementation if they have been created
+            // Add the backing field and property to the type
             type.Fields.TryAdd(backingField);
             type.Properties.TryAdd(implementation);
-            
+
             return;
 
+            // Local helper function to initialize the backing field and property definition.
             void Init(in TypeDefinition @type, out PropertyDefinition propertyImpl)
             {
                 propertyImpl = null;
 
-                //create the backing field
+                // Create the backing field (compiler-generated name format)
                 backingField = type.FindField($"<{property.Name}>k__BackingField");
                 if (backingField == null)
                 {
@@ -244,15 +327,15 @@ internal static class InjectionHelper
                 }
                 else
                     HandleError($"Field '<{property.Name}>k__BackingField' already exists in {type.FullName}", errorHandlingStrategy);
-                
-                // Create the property
+
+                // Create the property definition
                 propertyImpl = type.FindProperty(property.Name);
                 if (propertyImpl == null)
                 {
                     propertyImpl = new PropertyDefinition(property.Name, InterfacePropertyAttributes, typeRef);
-                    
+
                     propertyImpl.CopyCustomAttributes(property);
-                    
+
                     propertyImpl.MarkAsInjected(type.Module);
                 }
                 else
@@ -262,6 +345,14 @@ internal static class InjectionHelper
             }
         }
 
+        /// <summary>
+        /// Implements a single event from an interface into the target type.
+        /// Creates backing fields and add/remove/raise methods as needed.
+        /// </summary>
+        /// <param name="type">The target type to implement the event into.</param>
+        /// <param name="event">The event definition from the interface.</param>
+        /// <param name="blacklist">Set of members already implemented to avoid duplicates.</param>
+        /// <param name="errorHandlingStrategy">The strategy for handling errors during implementation.</param>
         private static void ImplementEvent(in TypeDefinition type, EventDefinition @event,
             in HashSet<IMemberDefinition> blacklist,
             ErrorHandlingStrategy errorHandlingStrategy)
@@ -271,17 +362,20 @@ internal static class InjectionHelper
 
             var hasImplementation = false;
 
+            // Skip if already implemented
             if (!blacklist.Add(@event))
                 return;
 
             Preloader.Log.LogDebug($"Adding Event     '{@event.Name}' to {type.FullName}'");
-            
+
+            // Check for event-specific error handling strategy
             var attribute = @event.CustomAttributes.FirstOrDefault(a => a.AttributeType.FullName == ErrorStrategyAttributeName);
             if (attribute != null)
             {
                 errorHandlingStrategy = attribute.GetAttributeInstance<HandleErrorsAttribute>().Strategy;
             }
-                
+
+            // Import the event type (delegate) into the target module
             var typeRef = type.Module.ImportReference(@event.EventType);
 
             if (@event.AddMethod is { IsAbstract: true } && blacklist.Add(@event.AddMethod))
@@ -533,7 +627,7 @@ internal static class InjectionHelper
     private static void MarkAsInjected<T>(this T target, ModuleDefinition module) where T : MemberReference, ICustomAttributeProvider
     {
         // Import the attribute type from your current assembly
-        var attributeTypeRef = module.ImportReference(typeof(InjectedMemberAttribute));
+        module.ImportReference(typeof(InjectedMemberAttribute));
 
         // Get the constructor you want to use
         var attributeCtor = module.ImportReference(typeof(InjectedMemberAttribute).GetConstructor([]));

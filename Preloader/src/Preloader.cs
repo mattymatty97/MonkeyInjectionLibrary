@@ -61,8 +61,8 @@ internal static class Preloader
                 foreach (var module in assembly.Modules)
                 {
                     //fix BepInEx default loader ( no idea why they do not use their own Resolver when loading patched assemblies )
-                    module.assembly_resolver = Disposable.NotOwned(TypeLoader.ReaderParameters.AssemblyResolver);
-                    module.metadata_resolver = new MetadataResolver(TypeLoader.ReaderParameters.AssemblyResolver);
+                    module.assembly_resolver = Disposable.NotOwned<IAssemblyResolver>(TypeLoader.Resolver);
+                    module.metadata_resolver = new MetadataResolver(TypeLoader.Resolver);
                     
                     foreach (var type in module.Types)
                     {
