@@ -1,0 +1,19 @@
+﻿using System;
+
+namespace InjectionLibrary.Attributes;
+
+[AttributeUsage(validOn: AttributeTargets.Assembly | AttributeTargets.Interface | AttributeTargets.Property | AttributeTargets.Method)]
+public class HandleErrorsAttribute : Attribute
+{
+    public HandleErrorsAttribute(ErrorHandlingStrategy strategy)
+    {
+        Strategy = strategy;
+    }
+
+    public HandleErrorsAttribute(int strategy)
+    {
+        Strategy = (ErrorHandlingStrategy)strategy;
+    }
+
+    public ErrorHandlingStrategy Strategy { get; }
+}
