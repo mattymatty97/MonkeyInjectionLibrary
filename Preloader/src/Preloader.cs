@@ -10,11 +10,14 @@ using BepInEx.Logging;
 using InjectionLibrary.Attributes;
 using InjectionLibrary.Exceptions;
 using InjectionLibrary.Utils;
+using JetBrains.Annotations;
 using Mono;
 using Mono.Cecil;
+// ReSharper disable InconsistentNaming
 
 namespace InjectionLibrary;
 
+[UsedImplicitly(ImplicitUseTargetFlags.WithMembers)]
 internal static class Preloader
 {
     public const string GUID = MyPluginInfo.PLUGIN_GUID;
@@ -23,7 +26,7 @@ internal static class Preloader
 		
     internal static readonly BepInPlugin Plugin = new BepInPlugin(GUID, NAME, VERSION);
 
-    private static ReaderParameters ReaderParameters;
+    private static ReaderParameters _readerParameters;
     
     private static readonly string RequiresInjectionAttributeName = typeof(RequiresInjectionsAttribute).FullName;
     private static readonly string InjectInterfaceAttributeName = typeof(InjectInterfaceAttribute).FullName;
@@ -40,14 +43,11 @@ internal static class Preloader
     private static bool _inError;
     
     //Required by BepInEx!
-    // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once InconsistentNaming
     public static IEnumerable<string> TargetDLLs => EnumerateTargetDlLs();
 
-    private static string _targetAssembly = null;
+    private static string _targetAssembly;
         
     //Required by BepInEx!
-    // ReSharper disable once UnusedMember.Global
     public static void Patch(ref AssemblyDefinition assembly)
     {
         if (_inError)
@@ -60,7 +60,7 @@ internal static class Preloader
                 Log.LogInfo($"Patching {_targetAssembly}");
                 foreach (var module in assembly.Modules)
                 {
-                    //fix BepInEx default loader ( no idea why they do not use their own Resolver when loading patched assemblies )
+                    //fix BepInEx default loader (no idea why they do not use their own Resolver when loading patched assemblies)
                     module.assembly_resolver = Disposable.NotOwned<IAssemblyResolver>(TypeLoader.Resolver);
                     module.metadata_resolver = new MetadataResolver(TypeLoader.Resolver);
                     
@@ -84,24 +84,24 @@ internal static class Preloader
                 Log.LogFatal($"Exception while patching {assembly.Name.Name}:\n{ex}");
         }
 
-        if (!PluginConfig.Enabled.Value) 
+        if (!DevelopConfig.Enabled.Value) 
             return;
             
-        var outputAssembly = $"{PluginConfig.OutputPath.Value}/{assembly.Name.Name}{PluginConfig.OutputExtension.Value}";
+        var outputAssembly = $"{DevelopConfig.OutputPath.Value}/{assembly.Name.Name}{DevelopConfig.OutputExtension.Value}";
         Log.LogWarning($"Saving modified Assembly to {outputAssembly}");
         assembly.Write(outputAssembly);
     }
         
     //Required by BepInEx!
-    // ReSharper disable once UnusedMember.Global
     public static void Initialize()
     {
         Log.LogInfo("Preloader Started");
-        PluginConfig.Init();
+        ModConfig.Init();
+        DevelopConfig.Init();
         
         var resolver = new DefaultAssemblyResolver();
 
-        ReaderParameters = new ReaderParameters
+        _readerParameters = new ReaderParameters
         {
             ReadWrite = false,
             ReadSymbols = false,
@@ -124,7 +124,7 @@ internal static class Preloader
                          Paths.PatcherPluginPath,
                      }.Concat(Paths.DllSearchPaths))
             {
-                if (Utility.TryResolveDllAssembly(assemblyName, item, ReaderParameters, out var assembly))
+                if (Utility.TryResolveDllAssembly(assemblyName, item, _readerParameters, out var assembly))
                 {
                     return assembly;
                 }
@@ -133,24 +133,32 @@ internal static class Preloader
             Log.LogWarning($"Could not find assembly: {assemblyName}");
             return null;
         };
-    }
-    
-    private static bool PublicKeyTokenEquals(byte[] a, byte[] b)
-    {
-        if (a == null && b == null) return true;
-        if (a == null || b == null) return false;
-        if (a.Length != b.Length) return false;
-
-        for (int i = 0; i < a.Length; i++)
-            if (a[i] != b[i])
-                return false;
-
-        return true;
+        
+        //make sure the runtime can find any dll from the mods folders
+        if (ModConfig.EnhancedCompatibility.Value)
+            AppDomain.CurrentDomain.AssemblyResolve += delegate(object _, ResolveEventArgs args)
+            {
+                var assemblyName = new AssemblyName(args.Name);
+                foreach (var item in new[]
+                         {
+                             Paths.BepInExAssemblyDirectory,
+                             Paths.PluginPath,
+                             Paths.PatcherPluginPath,
+                         }.Concat(Paths.DllSearchPaths))
+                {
+                    if (Utility.TryResolveDllAssembly(assemblyName, item, out var assembly))
+                    {
+                        return assembly;
+                    }
+                }
+                
+                return null;
+            };
     }
     
 
     //Required by BepInEx!
-    // ReSharper disable once UnusedMember.Global
+    [UsedImplicitly]
     public static void Finish()
     {
         foreach (var assembly in LoadedAssemblies)
@@ -192,7 +200,7 @@ internal static class Preloader
             try
             {
                 //try to load the assembly
-                var assemblyDefinition = AssemblyDefinition.ReadAssembly(path, ReaderParameters);
+                var assemblyDefinition = AssemblyDefinition.ReadAssembly(path, _readerParameters);
                 
                 //check if it is tagged with RequiresInjectionAttribute
                 if (!assemblyDefinition.HasCustomAttributes)
@@ -210,6 +218,20 @@ internal static class Preloader
                 }
 
                 Log.LogDebug($"Assembly {assemblyDefinition.Name.Name} Wants to inject something");
+
+                if (assemblyDefinition.Name.Name != Path.GetFileNameWithoutExtension(path))
+                {
+                    Log.LogFatal($"""
+
+                                  ⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+                                  Found assembly "{Path.GetRelativePath(Paths.BepInExRootPath, path)}"
+                                  with AssemblyName of "{assemblyDefinition.Name.Name}".
+                                  The file name has to be the same as the AssemblyName!
+                                  ⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+                                  """);
+                    _inError = true;
+                    break;
+                }
 
                 LoadedAssemblies.AddLast(assemblyDefinition);
 
@@ -280,7 +302,7 @@ internal static class Preloader
         _targetAssembly = null;
     }
 
-    private static class PluginConfig
+    private static class DevelopConfig
     {
         public static void Init()
         {
@@ -291,7 +313,7 @@ internal static class Preloader
             OutputExtension = config.Bind("DevelOptions", "OutputExtension", ".pdll", "Extension to use for the modified dlls\n( Do not use .dll if outputting inside the BepInEx folders )");
 
             //remove unused options
-            PropertyInfo orphanedEntriesProp = config.GetType()
+            var orphanedEntriesProp = config.GetType()
                 .GetProperty("OrphanedEntries", BindingFlags.NonPublic | BindingFlags.Instance);
 
             var orphanedEntries = (Dictionary<ConfigDefinition, string>)orphanedEntriesProp!.GetValue(config, null);
@@ -303,6 +325,27 @@ internal static class Preloader
         internal static ConfigEntry<bool> Enabled;
         internal static ConfigEntry<string> OutputPath;
         internal static ConfigEntry<string> OutputExtension;
+    }
+    
+    private static class ModConfig
+    {
+        public static void Init()
+        {
+            var config = new ConfigFile(Utility.CombinePaths(Paths.ConfigPath, $"{NAME}.cfg"), true, Plugin);
+            //Initialize Configs
+            EnhancedCompatibility = config.Bind("LoadOptions", "enhanced_compatibility", false, "Try to load missing assemblies from BepInEx folders");
+            
+            //remove unused options
+            var orphanedEntriesProp = config.GetType()
+                .GetProperty("OrphanedEntries", BindingFlags.NonPublic | BindingFlags.Instance);
+
+            var orphanedEntries = (Dictionary<ConfigDefinition, string>)orphanedEntriesProp!.GetValue(config, null);
+
+            orphanedEntries.Clear(); // Clear orphaned entries (Unbinded/Abandoned entries)
+            config.Save(); // Save the config file
+        }
+
+        internal static ConfigEntry<bool> EnhancedCompatibility;
     }
 
 }

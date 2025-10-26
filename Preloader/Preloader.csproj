@@ -9,13 +9,14 @@
 	
     <ItemGroup>
         <PackageReference Include="BepInEx.Core" Version="5.4.21"/>
+        <PackageReference Include="JetBrains.Annotations" Version="2025.2.2" PrivateAssets="all"/>
     </ItemGroup>
 	
     <!-- Defining the reference files that have to be publicized. -->
     <ItemGroup>
         <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all"/>
         <!-- Publicize directly when referencing -->
-        <PackageReference Include="Mono.Cecil" Version="0.11.4" Publicize="True" PrivateAssets="all"/>
+        <PackageReference Include="Mono.Cecil" Version="0.11.4" PrivateAssets="all" Publicize="True"/>
 
         <!-- clean referencing -->
     </ItemGroup>
